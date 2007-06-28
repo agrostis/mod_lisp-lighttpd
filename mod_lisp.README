@@ -1,0 +1,107 @@
+This is a branch of mod_lisp for the Lighttpd server.  The original mod_lisp
+(for Apache) has been written by Marc Battyani and based on the example module
+from the Apache distribution, and various other modules.  mod_lisp-lighttpd is
+based on modules provided with the Lighttpd source, primarily mod_proxy.
+
+Versions of mod_lisp-lighttpd are numbered L.<M>.<N> to distinguish them from
+the Apache branch.  The current version is L.0.2, which matches Lighttpd v.
+1.4.15. 
+
+
+[Contents of the distribution]
+
+  Makefile.in-1.4.15.patch  -  a patch for lighttpd-1.4.15/src/Makefile.in
+  mod_lisp.c                -  the module source
+  mod_lisp.README           -  this notice
+
+
+[Installation]
+
+Lighttpd must be recompiled and reinstalled with mod_lisp added to its
+source.  For this end, download and unpack lighttpd-1.4.15, e.g. from
+http://www.lighttpd.net/download/lighttpd-1.4.15.tar.gz, and then continue
+as follows (I presuppose a Unix-like environment):
+
+1. Copy mod_lisp.c and Makefile.in-1.4.15.patch to lighttpd-1.4.15/src.
+2. Chdir to lighttpd-1.4.15/src and apply the patch by running 
+   ``patch < Makefile.in-1.4.15.patch''.
+3. Build and install Lighttpd as described in the INSTALL file for that
+   distribution.
+
+
+[Configuration]
+
+mod_lisp-lighttpd is configured via the Lighttpd configuration file which
+can ordinarily be found at /usr/local/etc/lighttpd/lighttpd.conf,
+/etc/lighttpd/lighttpd.conf, or some similar location.  Please refer to
+http://trac.lighttpd.net/trac/wiki/Docs for the general description of the
+file's syntax and semantics.  To make Lighttpd load mod_lisp, include
+the string "mod_lisp" in the list server.modules, e.g.:
+
+  server.modules      = ( "mod_access",
+                          "mod_lisp",
+                          "mod_cgi",
+                          "mod_accesslog" )
+
+Options for mod_lisp are pretty straightforward:
+
+  ## The port on which a Lisp listens for incoming connections
+  lisp.server-port    = <int>        # default: 3000
+
+  ## The IP address for the Lisp
+  lisp.server-ip      = <string>     # default: "127.0.0.1"
+
+  ## The server-id string sent to the Lisp
+  lisp.server-id      = <string>     # default: "lighttpd"
+
+  ## How much diagnostic data written to Lighttpd error log. This tries to
+  ## reproduce Apache's ap_log_error interface:
+  ## LOGLEVEL_EMERG   = 0            : system is unusable
+  ## LOGLEVEL_ALERT   = 1            : action must be taken immediately
+  ## LOGLEVEL_CRIT    = 2            : critical conditions
+  ## LOGLEVEL_ERR     = 3            : error conditions
+  ## LOGLEVEL_WARNING = 4            : warning conditions
+  ## LOGLEVEL_NOTICE  = 5            : normal but significant condition
+  ## LOGLEVEL_INFO    = 6            : informational
+  ## LOGLEVEL_DEBUG   = 7            : debug-level messages
+  lisp.log-level      = <int>        # default: 4
+
+  ## Whether requests should be handled by mod_lisp
+  lisp.use-handler    = <bool>       # default: "disable"
+
+These options are used most effectively in conjunction with conditional
+sessions, e.g.:
+
+  lisp.server-id      = "red-spiders"
+  lisp.log-level      = 5
+
+  ## Forward requests to an UnCommon Web server on localhost:
+  $HTTP["url"] =~ "\.ucw([/?]|$)" {
+    lisp.use-handler  = "enable"
+    lisp.server-ip    = "127.0.0.1"
+    lisp.log-level    = 7
+  }
+
+  ## Forward requests with a different hostname to a remote server:
+  $HTTP["host"] =~ "human-sacrifice.gov" {
+    lisp.use-handler = "enable"
+    lisp.server-ip   = "213.155.151.152"
+    lisp.log-level   = 0  # we don't meddle in government affairs
+  }
+
+
+[Support]
+
+mod_lisp-lighttpd is maintained by Boris Smilga.  Please address all bug
+reports and suggestions to boris.smilga (at) gmail (dot) com.
+
+
+[Copying]
+
+This work is distributed under a FreeBSD style license (contact the
+maintainer if you want another license).  Various portions of code are due
+to Marc Battyani, Jan Kneschke and Boris Smilga, as specified in the
+copyright notice in the source file.  The Apache licence has been retained
+for legacy reasons, although ostensibly no Apache code is left in the
+source.
+
