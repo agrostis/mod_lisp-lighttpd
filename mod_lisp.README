@@ -4,13 +4,15 @@ from the Apache distribution, and various other modules.  mod_lisp-lighttpd is
 based on modules provided with the Lighttpd source, primarily mod_proxy.
 
 Versions of mod_lisp-lighttpd are numbered L.<M>.<N> to distinguish them from
-the Apache branch.  The current version is L.0.2, which matches Lighttpd v.
-1.4.15. 
+the Apache branch.  The current version is L.0.2, which matches Lighttpd vv.
+1.4.15 upto and including 1.4.19. 
 
 
 [Contents of the distribution]
 
   Makefile.in-1.4.15.patch  -  a patch for lighttpd-1.4.15/src/Makefile.in
+  Makefile.in-1.4.18.patch  -  a patch for lighttpd-1.4.18/src/Makefile.in
+  Makefile.in-1.4.19.patch  -  a patch for lighttpd-1.4.19/src/Makefile.in
   mod_lisp.c                -  the module source
   mod_lisp.README           -  this notice
 
@@ -18,13 +20,14 @@ the Apache branch.  The current version is L.0.2, which matches Lighttpd v.
 [Installation]
 
 Lighttpd must be recompiled and reinstalled with mod_lisp added to its
-source.  For this end, download and unpack lighttpd-1.4.15, e.g. from
-http://www.lighttpd.net/download/lighttpd-1.4.15.tar.gz, and then continue
-as follows (I presuppose a Unix-like environment):
+source.  For this end, download and unpack lighttpd, e.g. from
+http://www.lighttpd.net/download/lighttpd-1.4.M.tar.gz (where M is the
+minor version), and then continue as follows (I presuppose a Unix-like
+environment):
 
-1. Copy mod_lisp.c and Makefile.in-1.4.15.patch to lighttpd-1.4.15/src.
-2. Chdir to lighttpd-1.4.15/src and apply the patch by running 
-   ``patch < Makefile.in-1.4.15.patch''.
+1. Copy mod_lisp.c and Makefile.in-1.4.M.patch to lighttpd-1.4.M/src.
+2. Chdir to lighttpd-1.4.M/src and apply the patch by running 
+   ``patch < Makefile.in-1.4.M.patch''.
 3. Build and install Lighttpd as described in the INSTALL file for that
    distribution.
 
