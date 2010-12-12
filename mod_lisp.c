@@ -226,6 +226,12 @@ typedef struct {
   unsigned short loglevel;
 } plugin_config;
 
+#if defined(LIGHTTPD_VERSION_ID)		       \
+  && ((LIGHTTPD_VERSION_ID & (0xFF << 16)) >> 16 == 1) \
+  && ((LIGHTTPD_VERSION_ID & (0xFF << 8)) >> 8 == 4) \
+  && ((LIGHTTPD_VERSION_ID & 0xFF) >= 28)
+#define fdevent_event_add fdevent_event_set
+#endif
 
 /* Plugin config for all request/connections. */
 
