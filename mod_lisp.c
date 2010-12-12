@@ -644,8 +644,10 @@ static int get_remote_port(server *srv, connection *con)
     switch (remote_addr.plain.sa_family) {
     case AF_INET:
       return (int)(ntohs(remote_addr.ipv4.sin_port));
+#ifdef HAVE_IPV6
     case AF_INET6:
       return (int)(ntohs(remote_addr.ipv6.sin6_port));
+#endif
     default:
       break;
     }
