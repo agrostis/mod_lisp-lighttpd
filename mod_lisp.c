@@ -270,7 +270,7 @@ INIT_FUNC (mod_lisp_init)
   return p;
 }
 
-/* Destroy the plugin data. */ /* L-OK */
+/* Destroy the plugin data. */
 FREE_FUNC (mod_lisp_free)
 {
   plugin_data *p = p_d;
@@ -368,7 +368,11 @@ static const char *loglevel_string[] = {
 #define MSG_BUFFER (char*)msg_buffer
 static char msg_buffer[MSG_LENGTH+1];
 
-/* handle plugin config and check values */ /* L-OK */
+#define LOG_ERROR_MAYBE_BUF(srv, plugin, level, ...)  \
+  snprintf(MSG_BUFFER, MSG_LENGTH, __VA_ARGS__); \
+  LOG_ERROR_MAYBE(srv, plugin, level, MSG_BUFFER)
+
+/* handle plugin config and check values */
 SETDEFAULTS_FUNC (mod_lisp_set_defaults)
 {
   plugin_data *p = p_d;
@@ -400,8 +404,8 @@ SETDEFAULTS_FUNC (mod_lisp_set_defaults)
     cv[3].destination = s->LispServerIP;
     cv[4].destination = &(s->loglevel);
 
-    if (0 != config_insert_values_global
-              (srv, ((data_config *)srv->config_context->data[i])->value, cv)) {
+    if (0 != config_insert_values_global(srv,
+            ((data_config *)srv->config_context->data[i])->value, cv)) {
       return HANDLER_ERROR;
     }
 
@@ -420,8 +424,8 @@ SETDEFAULTS_FUNC (mod_lisp_set_defaults)
   return HANDLER_GO_ON;
 }
 
-#define PATCH(x)  p->conf.x = s->x
 static int mod_lisp_patch_connection(server *srv, connection *con, plugin_data *p)
+#define PATCH(x)  p->conf.x = s->x
 {
   size_t i, j;
   plugin_config *s = p->config_storage[0];
@@ -509,7 +513,7 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
              socket_msg, hctx->fd);
     LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
     handler_ctx_free(hctx);
-    con->plugin_ctx[p->id] = NULL;  
+    con->plugin_ctx[p->id] = NULL;
   }
 
   return HANDLER_GO_ON;
@@ -559,9 +563,8 @@ static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
     ret = sockerr ? -1 : 0;
   } else {
     if (-1 == (sock = socket(AF_INET, SOCK_STREAM, 0))) {
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "socket() failed (%s)", strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                          "socket() failed (%s)", strerror(errno));
       return HANDLER_ERROR;
     }
 
@@ -571,9 +574,8 @@ static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
     fdevent_register(srv->ev, sock, lisp_handle_fdevent, hctx);
 
     if (-1 == fdevent_fcntl_set(srv->ev, sock)) {
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "fcntl() failed (%s)", strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                          "fcntl() failed (%s)", strerror(errno));
       return HANDLER_ERROR;
     }
     
@@ -976,8 +978,8 @@ static handler_t mod_lisp_prepare_response (server *srv, handler_ctx *hctx)
     LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
     return HANDLER_ERROR;
   } else {
-    snprintf(MSG_BUFFER, MSG_LENGTH, "%d bytes from Lisp", bytes);
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                        "%d bytes from Lisp", bytes);
   }
   if (bytes > 0) {
     /* Avoid too small buffer. */
@@ -1008,7 +1010,7 @@ static handler_t mod_lisp_prepare_response (server *srv, handler_ctx *hctx)
         /* Rectify HTTP status. */
         if (!(con->parsed_response & HTTP_STATUS)
             || con->http_status <= 0) {
-          con->http_status = 502; /* mod_lisp is still a kind of proxy. */
+          con->http_status = 502; /* mod_lisp is, after all, a kind of proxy. */
           con->parsed_response |= HTTP_STATUS;
         }
         /* Unset content length and return immediately if the request method is
