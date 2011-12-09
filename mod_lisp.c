@@ -220,6 +220,8 @@
 #define DEFAULT_LISP_SERVER_IP "127.0.0.1"
 #define DEFAULT_LISP_SERVER_ID "lighttpd"
 #define DEFAULT_LISP_SERVER_PORT 3000
+#define DEFAULT_LISP_SOCKET_POOL_SIZE 1024
+#define LISP_STALE_SOCKET_TOLERANCE 10000
 #define HEADER_STR_LEN 500
 
 typedef struct {
@@ -227,6 +229,7 @@ typedef struct {
   buffer *LispServerIP;
   unsigned short LispServerPort;
   buffer *LispServerId;
+  unsigned short LispSocketPoolSize;
   unsigned short loglevel;
 } plugin_config;
 
@@ -240,33 +243,145 @@ typedef struct {
 /* Plugin config for all request/connections. */
 
 typedef struct {
+  int fd, fde_ndx, state;
+  buffer *ip, *id;
+  unsigned short port;
+} fd_data;
+
+#define SPLICE_FDE(_fd_data) &((_fd_data)->fde_ndx), (_fd_data)->fd
+#define SPLICE_HOSTPORT(_fd_data) (_fd_data)->ip->ptr, (_fd_data)->port, \
+    (_fd_data)->id->ptr
+
+#define FD_STATE_WRITE  0x1
+#define FD_STATE_READ   0x2
+#define FD_STATE_UNSAFE_EV_COUNT(_state)       ((_state) >> 2)
+#define FD_STATE_UNSAFE_EV_COUNT_RESET(_state) ((_state) &= 0x3)
+#define FD_STATE_UNSAFE_EV_COUNT_INC(_state)   ((_state) += 0x4)
+
+typedef struct {
   PLUGIN_DATA;
 
-  buffer *LispServerIP;
-  buffer *LispServerId;
-  unsigned short LispServerPort;
-  int LispSocket;
-  unsigned short UnsafeLispSocket;
-  chunkqueue *request_queue;
-  buffer *response_buf;
+  fd_data *LispSocketPool;
+  unsigned short LispSocketPoolSize, LispSocketPoolUsed;
 
   plugin_config **config_storage;
   plugin_config conf;
 } plugin_data;
 
-/* Init the plugin data. */ /* L-OK */
+void mod_lisp_init_socket_pool (server *srv, plugin_data *p)
+{
+  unsigned short size, i;
+  fd_data *ff;
+  UNUSED (srv);
+
+  if (! p->LispSocketPool) {
+    size = p->conf.LispSocketPoolSize;
+    p->LispSocketPoolSize = size;
+    p->LispSocketPool = calloc(size, sizeof(fd_data));
+    for (ff = p->LispSocketPool, i = 0; i < size; ++i, ++ff) {
+      ff->fd = -1;
+      ff->fde_ndx = -1;
+      ff->state = 0;
+      ff->ip = buffer_init_buffer(p->conf.LispServerIP);
+      ff->id = buffer_init_buffer(p->conf.LispServerId);
+      ff->port = p->conf.LispServerPort;
+    }
+    p->LispSocketPoolUsed = 0;
+  }
+}
+
+void mod_lisp_free_socket_pool (server *srv, plugin_data *p)
+{
+  unsigned short i;
+  fd_data *ff;
+
+  if (p->LispSocketPool) {
+    for (ff = p->LispSocketPool, i = 0; i <= p->LispSocketPoolUsed; ++i, ++ff) {
+      if (ff->fd >= 0) {
+        close(ff->fd);
+        srv->cur_fds--;
+      }
+      if (ff->ip) buffer_free(ff->ip);
+      if (ff->id) buffer_free(ff->id);
+    }
+    free(p->LispSocketPool);
+    p->LispSocketPool = NULL;
+    p->LispSocketPoolSize = p->LispSocketPoolUsed = 0;
+  }
+}
+
+fd_data * mod_lisp_allocate_socket (plugin_data *p)
+{
+  int i;
+  fd_data *ff, *ff_open, *ff_free, *ff_stale, *ff_borrowed;
+
+  ff_open = ff_free = ff_stale = ff_borrowed = NULL;
+  for (ff = p->LispSocketPool, i = 0;
+       i <= p->LispSocketPoolUsed && i < p->LispSocketPoolSize
+         && ! (ff_open && ff_free && ff_stale && ff_borrowed);
+       ++i, ++ff) {
+    if (ff->fd >= 0) {
+      if (! (ff->state & (FD_STATE_WRITE | FD_STATE_READ))) {
+        if (buffer_is_equal(ff->ip, p->conf.LispServerIP)
+            && ff->port == p->conf.LispServerPort) {
+          /* Option 1: an open, non-stale socket to reuse */
+          if (!ff_open) ff_open = ff;
+        } else {
+          /* Option 2: the same, but the socket is open to a different Lisp */
+          if (!ff_borrowed) ff_borrowed = ff;
+        }
+      } else if ((FD_STATE_UNSAFE_EV_COUNT(ff->state)
+                    >= LISP_STALE_SOCKET_TOLERANCE)) {
+        /* Option 3: a stale socket */
+        if (!ff_stale) ff_stale = ff;
+      }
+    } else {
+      /* Option 4: an unallocated slot */
+      if (!ff_free) ff_free = ff;
+    }
+  }
+
+  /* Allocation priority */
+  if (ff_open) ff = ff_open;
+  else if (ff_free) ff = ff_free;
+  else if (ff_stale) ff = ff_stale;
+  else ff = ff_borrowed;
+
+  if (ff != ff_open) {
+    if (ff == ff_borrowed) FD_STATE_UNSAFE_EV_COUNT_INC(ff->state);
+    buffer_copy_string_buffer(ff->ip, p->conf.LispServerIP);
+    buffer_copy_string_buffer(ff->id, p->conf.LispServerId);
+    ff->port = p->conf.LispServerPort;
+  }
+  if ((int) (ff - p->LispSocketPool) >= p->LispSocketPoolUsed)
+    ++(p->LispSocketPoolUsed);
+  return ff;
+}
+
+void mod_lisp_reset_socket (fd_data *ff)
+{
+  ff->fd = -1;
+  ff->fde_ndx = -1;
+  ff->state = 0;
+}
+
+void mod_lisp_release_socket (fd_data *ff, plugin_data *p)
+{
+  mod_lisp_reset_socket(ff);
+  buffer_reset(ff->ip);
+  buffer_reset(ff->id);
+  if ((int) (ff - p->LispSocketPool) == p->LispSocketPoolUsed - 1)
+    --(p->LispSocketPoolUsed);
+}
+
+/* Init the plugin data. */
 INIT_FUNC (mod_lisp_init)
 {
   plugin_data *p;
 
   p = calloc(1, sizeof(*p));
-  p->LispServerIP = buffer_init();
-  p->LispServerId = buffer_init();
-  p->request_queue = chunkqueue_init();
-  p->response_buf = buffer_init();
-  p->LispServerPort = 0;
-  p->LispSocket = 0;
-  p->UnsafeLispSocket = 0;
+  p->LispSocketPool = NULL;
+  p->LispSocketPoolSize = 0;
   return p;
 }
 
@@ -274,27 +389,17 @@ INIT_FUNC (mod_lisp_init)
 FREE_FUNC (mod_lisp_free)
 {
   plugin_data *p = p_d;
-  UNUSED (srv);
 
   if (!p) return HANDLER_GO_ON;
   if (p->config_storage) {
     size_t i;
     for (i = 0; i < srv->config_context->used; i++) {
       plugin_config *s = p->config_storage[i];
-      buffer_free(s->LispServerId);
-      buffer_free(s->LispServerIP);
       free(s);
     }
     free(p->config_storage);
   }
-  if (p->LispSocket) {
-    close(p->LispSocket);
-    srv->cur_fds--;
-  }
-  buffer_free(p->LispServerIP);
-  buffer_free(p->LispServerId);
-  chunkqueue_free(p->request_queue);
-  buffer_free(p->response_buf);
+  mod_lisp_free_socket_pool(srv, p);
   free(p);
 
   return HANDLER_GO_ON;
@@ -303,9 +408,9 @@ FREE_FUNC (mod_lisp_free)
 
 
 typedef struct {
-  int fd, fde_ndx;   /* Connection-specific copy of LispSocket */
-  int keep_socket;   /* False iff the socket should be closed after */
-                     /* completing the request */
+  fd_data * socket_data; /* Pointer into LispSocketPool */
+  int keep_socket;       /* False iff the socket should be closed after
+                            completing the request */
   unsigned long lisp_content_length;
   chunkqueue *request_queue;
   buffer *response_buf;
@@ -320,7 +425,7 @@ static handler_ctx* handler_ctx_init(plugin_data *p, connection *con)
   hctx = calloc(1, sizeof(*hctx));
   hctx->plugin = p;
   hctx->connection = con;
-  hctx->fd = 0;
+  hctx->socket_data = NULL;
   hctx->keep_socket = 0;
   hctx->lisp_content_length = 0;
   hctx->request_queue = NULL;
@@ -330,11 +435,8 @@ static handler_ctx* handler_ctx_init(plugin_data *p, connection *con)
 
 static void handler_ctx_free(handler_ctx *hctx)
 {
-  /* request_queue and response_buf are brought in from plugin data, and need
-     not be initialized or freed with the connection-specific context, but reset
-     them. */
-  if (hctx->request_queue) chunkqueue_reset(hctx->request_queue);
-  if (hctx->response_buf) buffer_reset(hctx->response_buf);
+  if (hctx->request_queue) chunkqueue_free(hctx->request_queue);
+  if (hctx->response_buf) buffer_free(hctx->response_buf);
   free(hctx);
 }
 
@@ -383,6 +485,7 @@ SETDEFAULTS_FUNC (mod_lisp_set_defaults)
     { "lisp.server-id",    NULL, T_CONFIG_STRING,  T_CONFIG_SCOPE_CONNECTION }, /* 2 */
     { "lisp.server-ip",    NULL, T_CONFIG_STRING,  T_CONFIG_SCOPE_CONNECTION }, /* 3 */
     { "lisp.log-level",    NULL, T_CONFIG_SHORT,   T_CONFIG_SCOPE_CONNECTION }, /* 4 */
+    { "lisp.max-sockets",  NULL, T_CONFIG_SHORT,   T_CONFIG_SCOPE_CONNECTION }, /* 5 */
     { NULL,                NULL, T_CONFIG_UNSET,   T_CONFIG_SCOPE_UNSET }
   };
 
@@ -397,12 +500,14 @@ SETDEFAULTS_FUNC (mod_lisp_set_defaults)
     s->LispServerId = buffer_init();
     s->LispServerPort = 0;
     s->loglevel = LOGLEVEL_NOERRNO + 1;
+    s->LispSocketPoolSize = 0;
     p->config_storage[i] = s;
     cv[0].destination = &(s->LispUseHandler);
     cv[1].destination = &(s->LispServerPort);
     cv[2].destination = s->LispServerId;
     cv[3].destination = s->LispServerIP;
     cv[4].destination = &(s->loglevel);
+    cv[5].destination = &(s->LispSocketPoolSize);
 
     if (0 != config_insert_values_global(srv,
             ((data_config *)srv->config_context->data[i])->value, cv)) {
@@ -414,6 +519,8 @@ SETDEFAULTS_FUNC (mod_lisp_set_defaults)
         BUFFER_COPY_STRING_CONST(s->LispServerIP, DEFAULT_LISP_SERVER_IP);
       if (buffer_is_empty(s->LispServerId))
         BUFFER_COPY_STRING_CONST(s->LispServerId, DEFAULT_LISP_SERVER_ID);
+      if (s->LispSocketPoolSize == 0)
+        s->LispSocketPoolSize = DEFAULT_LISP_SOCKET_POOL_SIZE;
       if (s->LispServerPort == 0)
         s->LispServerPort = DEFAULT_LISP_SERVER_PORT;
       if (s->loglevel > LOGLEVEL_NOERRNO)
@@ -435,6 +542,7 @@ static int mod_lisp_patch_connection(server *srv, connection *con, plugin_data *
   PATCH(LispServerPort);
   PATCH(LispServerIP);
   PATCH(loglevel);
+  PATCH(LispSocketPoolSize);
 
   /* Skip the first, global context. */
   for (i = 1; i < srv->config_context->used; i++) {
@@ -460,13 +568,10 @@ static int mod_lisp_patch_connection(server *srv, connection *con, plugin_data *
 }
 #undef PATCH
 
-static handler_t lisp_handle_fdevent(void *s, void *ctx, int revents);
-
 URIHANDLER_FUNC (mod_lisp_start)
 {
   handler_ctx *hctx;
   plugin_data *p = p_d;
-  UNUSED (srv);
 
   mod_lisp_patch_connection(srv, con, p);
 
@@ -477,6 +582,7 @@ URIHANDLER_FUNC (mod_lisp_start)
   } else {
     LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, "Lisp handler started");  
   }
+  mod_lisp_init_socket_pool(srv, p);
   hctx = handler_ctx_init(p, con);
   con->mode = p->id;
   con->plugin_ctx[p->id] = hctx;
@@ -492,26 +598,27 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
 
   if ((hctx = con->plugin_ctx[p->id])) {
     char *socket_msg;
-    if (hctx->fd == -1) {
+    if (hctx->socket_data->fd < 0) {
       socket_msg = "no socket";
     } else {
-      fdevent_event_del(srv->ev, &(hctx->fde_ndx), hctx->fd);
-      fdevent_unregister(srv->ev, hctx->fd);
+      fdevent_event_del(srv->ev, SPLICE_FDE(hctx->socket_data));
+      fdevent_unregister(srv->ev, hctx->socket_data->fd);
       if (hctx->keep_socket) {
         socket_msg = "keep socket";
+        if (hctx->socket_data->state & (FD_STATE_WRITE | FD_STATE_READ))
+          FD_STATE_UNSAFE_EV_COUNT_INC(hctx->socket_data->state);
       } else {
         socket_msg = "close socket";
-        close(hctx->fd);
+        close(hctx->socket_data->fd);
         srv->cur_fds--;
-        p->LispSocket = 0;
-        p->UnsafeLispSocket = 0;
+        mod_lisp_release_socket(hctx->socket_data, p);
       }
     }
-    snprintf(MSG_BUFFER, MSG_LENGTH,
-             "Lisp process at %s:%d for %s: request processed, %s (fd=%d)",
-             p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr,
-             socket_msg, hctx->fd);
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                        "Lisp process at %s:%d for %s: request processed,"
+                        " %s (fd=%d, total socket slot(s) allocated: %d)",
+                        SPLICE_HOSTPORT(hctx->socket_data), socket_msg,
+                        hctx->socket_data->fd, p->LispSocketPoolUsed);
     handler_ctx_free(hctx);
     con->plugin_ctx[p->id] = NULL;
   }
@@ -519,57 +626,56 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
   return HANDLER_GO_ON;
 }
 
-/* Open and return the socket. Cf. proxy_establish_connection() in mod_proxy.c. */
+static handler_t lisp_handle_fdevent(server *s, void *ctx, int revents);
+
+/* Open and return the socket. Cf. proxy_establish_connection() in
+   mod_proxy.c. */
 static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
 {
   struct sockaddr_in addr;
-  int ret;
+  int ret, sock;
   plugin_data *p = hctx->plugin;
   connection *con = hctx->connection;
-  plugin_config conf = hctx->plugin->conf;
-  int sock = hctx->fd;
 
-/* This exclusion in the original mod_lisp had to do with multithreading
-   in Win32 Apache (see change log for v. 2.1). For lighttpd, it is of
-   little worth. -- B.Sm. */
-/* #ifndef WIN32 */
-  if (p->LispSocket) {
-    if (p->UnsafeLispSocket
-        || ! buffer_is_equal(conf.LispServerIP, p->LispServerIP)
-        || conf.LispServerPort != p->LispServerPort) {
-      mod_lisp_connection_close(srv, con, p);
-      p->LispSocket = 0;
-      p->UnsafeLispSocket = 0;
-      buffer_reset(p->LispServerIP);
-      p->LispServerPort = 0;
-    } else {
-      hctx->fd = p->LispSocket;
-      return HANDLER_GO_ON;
+  if (hctx->socket_data) {
+    sock = hctx->socket_data->fd;
+  } else {
+    if (! (hctx->socket_data = mod_lisp_allocate_socket(p))) {
+      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR,
+                      "Cannot allocate from Lisp socket pool: no free slots");
+      return HANDLER_WAIT_FOR_FD;
+    }
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                        "Lisp process at %s:%d for %s: allocated fd=%d,"
+                        " fde_ndx=%d, state=%d, total socket slot(s) allocated: %d",
+                        SPLICE_HOSTPORT(hctx->socket_data),
+                        hctx->socket_data->fd, hctx->socket_data->fde_ndx,
+                        hctx->socket_data->state, p->LispSocketPoolUsed);
+    if ((sock = hctx->socket_data->fd) >= 0) {
+      if (FD_STATE_UNSAFE_EV_COUNT(hctx->socket_data->state) > 0) {
+        fdevent_event_del(srv->ev, SPLICE_FDE(hctx->socket_data));
+        fdevent_unregister(srv->ev, sock);
+        close(sock);
+        srv->cur_fds--;
+        LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                            "Lisp process at %s:%d for %s: close unsafe socket (fd=%d)",
+                            SPLICE_HOSTPORT(hctx->socket_data), sock);
+        mod_lisp_reset_socket(hctx->socket_data);
+        sock = -1;
+      } else {
+        return HANDLER_GO_ON;
+      }
     }
   }
-/* #endif */
 
-  if (hctx->fd) {
-    int sockerr;
-    socklen_t sockerr_len = sizeof(sockerr);
-    fdevent_event_del(srv->ev, &(hctx->fde_ndx), hctx->fd);
-    /* try to finish the connect() */
-    if (0 != getsockopt(hctx->fd, SOL_SOCKET, SO_ERROR, &sockerr, &sockerr_len)) {
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "getsockopt() failed (%s)", strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
-      return HANDLER_ERROR;
-    }
-    ret = sockerr ? -1 : 0;
-  } else {
+  if (sock <= 0) {
     if (-1 == (sock = socket(AF_INET, SOCK_STREAM, 0))) {
       LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
                           "socket() failed (%s)", strerror(errno));
       return HANDLER_ERROR;
     }
-
-    hctx->fd = sock;
-    hctx->fde_ndx = -1;
+    mod_lisp_reset_socket(hctx->socket_data);
+    hctx->socket_data->fd = sock;
     srv->cur_fds++;
     fdevent_register(srv->ev, sock, lisp_handle_fdevent, hctx);
 
@@ -579,14 +685,8 @@ static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
       return HANDLER_ERROR;
     }
     
-    p->LispSocket = 0;
-    p->UnsafeLispSocket = 0;
-    buffer_copy_string_buffer(p->LispServerIP, conf.LispServerIP);
-    buffer_copy_string_buffer(p->LispServerId, conf.LispServerId);
-    p->LispServerPort = conf.LispServerPort;
-    
-    addr.sin_addr.s_addr = inet_addr(p->LispServerIP->ptr);
-    addr.sin_port = htons(p->LispServerPort);
+    addr.sin_addr.s_addr = inet_addr(hctx->socket_data->ip->ptr);
+    addr.sin_port = htons(hctx->socket_data->port);
     addr.sin_family = AF_INET;
    
     /* Try to connect to Lisp. */
@@ -599,25 +699,32 @@ static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
 #endif /* WIN32 */
     if (ret == -1 && (errno == EINTR || errno == EINPROGRESS)) {
       /* As soon as something happens on the socket, this function shall be
-         re-entered and follow the getsockopt branch above. */
-      fdevent_event_add(srv->ev, &(hctx->fde_ndx), hctx->fd, FDEVENT_OUT);
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "connection to Lisp process at %s:%d for %s delayed (%s)",
-               p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr,
-               strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+         re-entered and follow the getsockopt branch below. */
+      fdevent_event_set(srv->ev, SPLICE_FDE(hctx->socket_data), FDEVENT_OUT);
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                          "connection to Lisp process at %s:%d for %s delayed (%s)",
+                          SPLICE_HOSTPORT(hctx->socket_data), strerror(errno));
       return HANDLER_WAIT_FOR_EVENT;
     }
+  } else {
+    int sockerr;
+    socklen_t sockerr_len = sizeof(sockerr);
+    fdevent_event_del(srv->ev, SPLICE_FDE(hctx->socket_data));
+    /* try to finish the connect() */
+    if (0 != getsockopt(sock, SOL_SOCKET, SO_ERROR, &sockerr, &sockerr_len)) {
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                          "getsockopt() failed (%s)", strerror(errno));
+      return HANDLER_ERROR;
+    }
+    ret = sockerr ? -1 : 0;
   }
 
   /* Check if we connected */
   if (ret == -1) {
-    snprintf(MSG_BUFFER, MSG_LENGTH,
-             "cannot connect socket to Lisp process at %s:%d for %s (%s)",
-             p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr,
-             strerror(errno));
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
-    hctx->fde_ndx = -1;
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                        "cannot connect socket to Lisp process at %s:%d for %s (%s)",
+                        SPLICE_HOSTPORT(hctx->socket_data), strerror(errno));
+    hctx->socket_data->fde_ndx = -1;
     mod_lisp_connection_close(srv, con, p);
     /* reset the enviroment and restart the sub-request */	
     connection_set_state(srv, con, CON_STATE_HANDLE_REQUEST);
@@ -627,11 +734,10 @@ static handler_t lisp_connection_open(server *srv, handler_ctx *hctx)
     return HANDLER_FINISHED;
   }
 
-  p->LispSocket = sock;
-  snprintf(MSG_BUFFER, MSG_LENGTH,
-           "opened socket fd=%d to Lisp process at %s:%d for %s",
-           sock, p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr);
-  LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+  hctx->socket_data->state |= (FD_STATE_READ | FD_STATE_WRITE);
+  LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                      "opened socket fd=%d to Lisp process at %s:%d for %s",
+                      sock, SPLICE_HOSTPORT(hctx->socket_data));
   return HANDLER_GO_ON;
 }
 
@@ -674,7 +780,6 @@ static void prepare_lisp_request (server *srv, handler_ctx *hctx)
   size_t i;
   buffer *buf;
   connection *con = hctx->connection;
-  plugin_data *p = hctx->plugin;
   chunkqueue *hr_cq = hctx->request_queue;
 
   buf = chunkqueue_get_append_buffer(hr_cq);
@@ -697,7 +802,7 @@ static void prepare_lisp_request (server *srv, handler_ctx *hctx)
 #endif
 
   /* Mod_lisp configuration and connection info. */
-  APPEND_HEADER("server-id", string_buffer, p->LispServerId);
+  APPEND_HEADER("server-id", string_buffer, hctx->socket_data->id);
   APPEND_HEADER("server-baseversion", string, PACKAGE_STRING);
   APPEND_HEADER("modlisp-version", string, MOD_LISP_VERSION);
   /* Server/connection configuration info. */
@@ -795,64 +900,31 @@ static handler_t mod_lisp_send_request (server *srv, handler_ctx *hctx)
 
   if (!hr_cq->bytes_in) {
     prepare_lisp_request(srv, hctx);
-    snprintf(MSG_BUFFER, MSG_LENGTH,
-             "Lisp process at %s:%d for %s: ready to send request",
-             p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr);
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                        "Lisp process at %s:%d for %s: ready to send request",
+                        SPLICE_HOSTPORT(hctx->socket_data));
   }
 
   ret = srv->network_backend_write(srv, con, hctx->fd, hr_cq); 
   chunkqueue_remove_finished_chunks(hr_cq);
   if (-1 == ret) {
     if (errno == EAGAIN && errno == EINTR) {
-      fdevent_event_add(srv->ev, &(hctx->fde_ndx), hctx->fd, FDEVENT_OUT);
+      fdevent_event_set(srv->ev, SPLICE_FDE(hctx->socket_data), FDEVENT_OUT);
       return HANDLER_WAIT_FOR_EVENT;
     } else {
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "failed to send request to Lisp process at %s:%d for %s (%s)",
-               p->LispServerIP->ptr, p->LispServerPort, p->LispServerId->ptr,
-               strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                          "failed to send request to Lisp process at %s:%d for %s (%s)",
+                          SPLICE_HOSTPORT(hctx->socket_data), strerror(errno));
       return HANDLER_ERROR;
     }
   }
   if (hr_cq->bytes_out == hr_cq->bytes_in) {
-    fdevent_event_del(srv->ev, &(hctx->fde_ndx), hctx->fd);
-    fdevent_event_add(srv->ev, &(hctx->fde_ndx), hctx->fd, FDEVENT_IN);
+    fdevent_event_del(srv->ev, SPLICE_FDE(hctx->socket_data));
+    fdevent_event_set(srv->ev, SPLICE_FDE(hctx->socket_data), FDEVENT_IN);
+    hctx->socket_data->state &= ~FD_STATE_WRITE;
   } else {
-    fdevent_event_add(srv->ev, &(hctx->fde_ndx), hctx->fd, FDEVENT_OUT);
+    fdevent_event_set(srv->ev, SPLICE_FDE(hctx->socket_data), FDEVENT_OUT);
   }
-  return HANDLER_WAIT_FOR_EVENT;
-}
-
-SUBREQUEST_FUNC (mod_lisp_handle_subrequest)
-{
-  handler_ctx *hctx;
-  handler_t ret;
-  plugin_data *p;
-
-  p = p_d;
-  if (con->mode != p->id) return HANDLER_GO_ON;
-  if (con->file_started) return HANDLER_FINISHED;
-  if (! (hctx = con->plugin_ctx[p->id])) return HANDLER_ERROR;
-  mod_lisp_patch_connection(srv, con, p);
-
-  /* We are not yet connected to Lisp. */
-  if (! hctx->request_queue) {
-    if ((ret = lisp_connection_open(srv, hctx)) != HANDLER_GO_ON)
-      return ret;
-    hctx->request_queue = p->request_queue;
-    hctx->request_queue->bytes_in = 0;
-  }
-  p->UnsafeLispSocket = 1;
-  /* We are connected, but the request has not yet been fully sent out. */
-  if (! hctx->response_buf) {
-    if ((ret = mod_lisp_send_request(srv, hctx)) != HANDLER_WAIT_FOR_EVENT)
-      return ret;
-    hctx->response_buf = p->response_buf;
-    hctx->parse_offset = 0;
-  }
-  /* Wait for incoming data. */
   return HANDLER_WAIT_FOR_EVENT;
 }
 
@@ -966,16 +1038,15 @@ static handler_t mod_lisp_prepare_response (server *srv, handler_ctx *hctx)
 {
   int bytes;
   ssize_t read_bytes; 
+  int sock = hctx->socket_data->fd;
   plugin_data *p    = hctx->plugin;
   connection *con   = hctx->connection;
   buffer *buf       = hctx->response_buf;
   
   /* Check how much we have to read. */
-  if (ioctl(hctx->fd, FIONREAD, &bytes)) {
-    snprintf(MSG_BUFFER, MSG_LENGTH, "ioctl() failed (%s)", strerror(errno));
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
-    snprintf(MSG_BUFFER, MSG_LENGTH, "ioctl() failed (%s)", strerror(errno));
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
+  if (ioctl(sock, FIONREAD, &bytes)) {
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                        "ioctl() failed (%s)", strerror(errno));
     return HANDLER_ERROR;
   } else {
     LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
@@ -990,11 +1061,10 @@ static handler_t mod_lisp_prepare_response (server *srv, handler_ctx *hctx)
       buffer_prepare_append(buf, buf->used + bytes);
     }
     /* Read from socket. */
-    if (-1 == (read_bytes = read(hctx->fd, buf->ptr + buf->used - 1, bytes))) {
-      snprintf(MSG_BUFFER, MSG_LENGTH,
-               "unexpected EOF from Lisp process on fd %d (%s)",
-               hctx->fd, strerror(errno));
-      LOG_ERROR_MAYBE(srv, p, LOGLEVEL_ERR, MSG_BUFFER);
+    if (-1 == (read_bytes = read(sock, buf->ptr + buf->used - 1, bytes))) {
+      LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_ERR,
+                          "unexpected EOF from Lisp process on fd %d (%s)",
+                          sock, strerror(errno));
       return HANDLER_ERROR;
     }
     assert(read_bytes);         /* This should be caught by the bytes > 0 above. */
@@ -1044,13 +1114,44 @@ static handler_t mod_lisp_prepare_response (server *srv, handler_ctx *hctx)
     http_chunk_append_mem(srv, con, "\n ", 2);
     http_chunk_append_mem(srv, con, NULL, 0);
     joblist_append(srv, con);   /* Connection to state RESPONSE_END */
+    hctx->socket_data->state &= ~FD_STATE_READ;
     return HANDLER_FINISHED;
   }
 
   return HANDLER_GO_ON;
 }
 
-static handler_t lisp_handle_fdevent(void *s, void *ctx, int revents)
+SUBREQUEST_FUNC (mod_lisp_handle_subrequest)
+{
+  handler_ctx *hctx;
+  handler_t ret;
+  plugin_data *p;
+
+  p = p_d;
+  if (con->mode != p->id) return HANDLER_GO_ON;
+  if (con->file_started) return HANDLER_FINISHED;
+  if (! (hctx = con->plugin_ctx[p->id])) return HANDLER_ERROR;
+  mod_lisp_patch_connection(srv, con, p);
+
+  /* We are not yet connected to Lisp. */
+  if (! hctx->request_queue) {
+    if ((ret = lisp_connection_open(srv, hctx)) != HANDLER_GO_ON)
+      return ret;
+    hctx->request_queue = chunkqueue_init();
+    hctx->request_queue->bytes_in = 0;
+  }
+  /* We are connected, but the request has not yet been fully sent out. */
+  if (! hctx->response_buf) {
+    ret = mod_lisp_send_request(srv, hctx);
+    if (ret != HANDLER_WAIT_FOR_EVENT) return ret;
+    hctx->response_buf = buffer_init();
+    hctx->parse_offset = 0;
+  }
+  /* Wait for incoming data. */
+  return HANDLER_WAIT_FOR_EVENT;
+}
+
+static handler_t lisp_handle_fdevent(server *s, void *ctx, int revents)
 {
   connection *con;
   plugin_data *p;
@@ -1061,9 +1162,11 @@ static handler_t lisp_handle_fdevent(void *s, void *ctx, int revents)
   con = hctx->connection; 
   p = hctx->plugin;
 
-  snprintf(MSG_BUFFER, MSG_LENGTH,
-           "fdevent from Lisp process on fd %d (revents=%d)", hctx->fd, revents);
-  LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+#if 1
+  LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                      "fdevent from Lisp process on fd %d (revents=%d)",
+                      hctx->socket_data->fd, revents);
+#endif
 
   /* Lisp is ready to read the request. */
   if ((revents & FDEVENT_OUT) && !hctx->response_buf) {
@@ -1121,9 +1224,12 @@ static handler_t lisp_handle_fdevent(void *s, void *ctx, int revents)
   }
 
   if (!handled) {
-    snprintf(MSG_BUFFER, MSG_LENGTH,
-             "fdevent on lisp %d (revents=%d): unhandled", hctx->fd, revents);
-    LOG_ERROR_MAYBE(srv, p, LOGLEVEL_DEBUG, MSG_BUFFER);
+    FD_STATE_UNSAFE_EV_COUNT_INC(hctx->socket_data->state);
+#if 1
+    LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
+                        "fdevent on lisp %d (revents=%d): unhandled, state=%d",
+                        hctx->socket_data->fd, revents, hctx->socket_data->state);
+#endif
   }
   return HANDLER_FINISHED;
 }
