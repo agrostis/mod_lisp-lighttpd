@@ -91,6 +91,15 @@
 
 /* == Change log ==========================================================
 
+  This is a branch of mod_lisp for Apache v. 2.43, adapted for lighttpd.  This
+  and all subsequent versions shall have ``L.'' prepended to them, so as to
+  distinguish them from the main mod_lisp-for-Apache trunk.  The maintainer of
+  this program should strive to keep it synched with the trunk.
+
+  Version L.0.4
+  Support for Lighttpd 1.4.29 (changed arity of server->network_backend_write),
+  and a new mechanism for tracking the state of open sockets (LispSocketPool).
+
   Version L.0.3
   Reflects the name change fdevent_event_add -> fdevent_event_set since
   Lighttpd 1.4.28. 
@@ -101,11 +110,7 @@
   ensuing discussion on trac.lighttpd.net).
 
   Version L.0.1
-
-  This is a branch of mod_lisp for Apache v. 2.43, adapted for lighttpd.  This
-  and all subsequent versions shall have ``L.'' prepended to them, so as to
-  distinguish them from the main mod_lisp-for-Apache trunk.  The maintainer of
-  this program should strive to keep it synched with the trunk.
+  Initial release.
 
   === Change log for the Apache mod_lisp ==================================
 
@@ -216,7 +221,7 @@
 
 #include "array.h"
 
-#define MOD_LISP_VERSION "L.0.3"
+#define MOD_LISP_VERSION "L.0.4"
 #define DEFAULT_LISP_SERVER_IP "127.0.0.1"
 #define DEFAULT_LISP_SERVER_ID "lighttpd"
 #define DEFAULT_LISP_SERVER_PORT 3000
@@ -233,11 +238,17 @@ typedef struct {
   unsigned short loglevel;
 } plugin_config;
 
-#if defined(LIGHTTPD_VERSION_ID)		       \
-  && ((LIGHTTPD_VERSION_ID & (0xFF << 16)) >> 16 == 1) \
-  && ((LIGHTTPD_VERSION_ID & (0xFF << 8)) >> 8 == 4) \
-  && ((LIGHTTPD_VERSION_ID & 0xFF) >= 28)
-#define fdevent_event_add fdevent_event_set
+#if defined(LIGHTTPD_VERSION_ID)
+#define LIGHTTPD_VERSION_ID_LT(maj, min, build) \
+  (((LIGHTTPD_VERSION_ID & (0xFF << 16)) >> 16 < maj) \
+   || ((LIGHTTPD_VERSION_ID & (0xFF << 8)) >> 8 < min)  \
+   || ((LIGHTTPD_VERSION_ID & 0xFF) < build))
+#else
+#define LIGHTTPD_VERSION_ID_LT(maj, min, build) 1
+#endif
+
+#if LIGHTTPD_VERSION_ID_LT(1, 4, 28)
+#define fdevent_event_set fdevent_event_add
 #endif
 
 /* Plugin config for all request/connections. */
@@ -905,7 +916,11 @@ static handler_t mod_lisp_send_request (server *srv, handler_ctx *hctx)
                         SPLICE_HOSTPORT(hctx->socket_data));
   }
 
-  ret = srv->network_backend_write(srv, con, hctx->fd, hr_cq); 
+  ret = srv->network_backend_write(srv, con, hctx->socket_data->fd, hr_cq
+#if ! LIGHTTPD_VERSION_ID_LT(1, 4, 29)
+                                   , MAX_WRITE_LIMIT
+#endif
+                                   );
   chunkqueue_remove_finished_chunks(hr_cq);
   if (-1 == ret) {
     if (errno == EAGAIN && errno == EINTR) {

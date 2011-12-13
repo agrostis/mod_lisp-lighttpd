@@ -4,8 +4,8 @@ from the Apache distribution, and various other modules.  mod_lisp-lighttpd is
 based on modules provided with the Lighttpd source, primarily mod_proxy.
 
 Versions of mod_lisp-lighttpd are numbered L.<M>.<N> to distinguish them from
-the Apache branch.  The current version is L.0.3, which matches Lighttpd vv.
-1.4.15 upto and including 1.4.28.
+the Apache branch.  The current version is L.0.4, which matches Lighttpd vv.
+1.4.15 upto and including 1.4.29.
 
 
 [Contents of the distribution]
@@ -60,10 +60,10 @@ Options for mod_lisp are pretty straightforward:
   ## The port on which a Lisp listens for incoming connections
   lisp.server-port    = <int>        # default: 3000
 
-  ## The IP address for the Lisp
+  ## The IP address for the Lisp server
   lisp.server-ip      = <string>     # default: "127.0.0.1"
 
-  ## The server-id string sent to the Lisp
+  ## The server-id string sent to the Lisp server
   lisp.server-id      = <string>     # default: "lighttpd"
 
   ## How much diagnostic data written to Lighttpd error log. This tries to
@@ -81,11 +81,15 @@ Options for mod_lisp are pretty straightforward:
   ## Whether requests should be handled by mod_lisp
   lisp.use-handler    = <bool>       # default: "disable"
 
+  ## Max. number of sockets which may be opened to all Lisp servers
+  lisp.max-sockets    = <int>        # default: 1024
+
 These options are used most effectively in conjunction with conditional
 sessions, e.g.:
 
   lisp.server-id      = "red-spiders"
   lisp.log-level      = 5
+  lisp.max-sockets    = 128
 
   ## Forward requests to an UnCommon Web server on localhost:
   $HTTP["url"] =~ "\.ucw([/?]|$)" {
