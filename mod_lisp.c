@@ -834,6 +834,9 @@ static void prepare_lisp_request (server *srv, handler_ctx *hctx)
 #ifdef USE_OPENSSL
   if (con->ssl) {
     SSL_SESSION *sess = SSL_get_session(con->ssl);
+    BUFFER_APPEND_STRING_CONST(buf, "ssl-state\n");
+    buffer_append_string_len(buf, SSL_state_string(con->ssl), 6);
+    BUFFER_APPEND_STRING_CONST(buf, "\n");
     if (sess && sess->session_id_length) {
       BUFFER_APPEND_STRING_CONST(buf, "ssl-session-id\n");
       buffer_append_string_len(buf, (char*)(sess->session_id), (size_t)(sess->session_id_length));
