@@ -221,7 +221,7 @@
 
 #include "array.h"
 
-#define MOD_LISP_VERSION "L.0.4"
+#define MOD_LISP_VERSION "L.0.5"
 #define DEFAULT_LISP_SERVER_IP "127.0.0.1"
 #define DEFAULT_LISP_SERVER_ID "lighttpd"
 #define DEFAULT_LISP_SERVER_PORT 3000

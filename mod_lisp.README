@@ -4,8 +4,8 @@ from the Apache distribution, and various other modules.  mod_lisp-lighttpd is
 based on modules provided with the Lighttpd source, primarily mod_proxy.
 
 Versions of mod_lisp-lighttpd are numbered L.<M>.<N> to distinguish them from
-the Apache branch.  The current version is L.0.4, which matches Lighttpd vv.
-1.4.15 upto and including 1.4.29.
+the Apache branch.  The current version is L.0.5, which matches Lighttpd vv.
+1.4.15 upto and including 1.4.35.
 
 
 [Contents of the distribution]
@@ -15,7 +15,11 @@ the Apache branch.  The current version is L.0.4, which matches Lighttpd vv.
   Makefile.in-1.4.19.patch  -  a patch for lighttpd-1.4.19/src/Makefile.in
   Makefile.in-1.4.23.patch  -  a patch for lighttpd-1.4.23/src/Makefile.in
   Makefile.in-1.4.25.patch  -  a patch for lighttpd-1.4.25/src/Makefile.in
+  Makefile.in-1.4.31.patch  -  a patch for lighttpd-1.4.31/src/Makefile.in
+  Makefile.in-1.4.33.patch  -  a patch for lighttpd-1.4.33/src/Makefile.in
+  Makefile.in-1.4.34.patch  -  a patch for lighttpd-1.4.34/src/Makefile.in
   Makefile.am-1.4.28.patch  -  a patch for lighttpd-1.4.28/src/Makefile.am
+  Makefile.am-1.4.34.patch  -  a patch for lighttpd-1.4.34/src/Makefile.am
   mod_lisp.c                -  the module source
   mod_lisp.README           -  this notice
 
