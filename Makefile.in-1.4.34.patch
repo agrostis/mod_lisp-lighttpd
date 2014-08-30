@@ -1,0 +1,70 @@
+--- Makefile.in.orig	2014-01-20 16:09:11.000000000 +0400
++++ Makefile.in	2014-07-26 00:56:03.536661758 +0400
+@@ -314,6 +314,12 @@
+ mod_proxy_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
+ 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
+ 	$(mod_proxy_la_LDFLAGS) $(LDFLAGS) -o $@
++mod_lisp_la_DEPENDENCIES = $(am__DEPENDENCIES_2)
++am_mod_lisp_la_OBJECTS = mod_lisp.lo
++mod_lisp_la_OBJECTS = $(am_mod_lisp_la_OBJECTS)
++mod_lisp_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
++	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
++	$(mod_lisp_la_LDFLAGS) $(LDFLAGS) -o $@
+ mod_redirect_la_DEPENDENCIES = $(am__DEPENDENCIES_1) \
+ 	$(am__DEPENDENCIES_2)
+ am_mod_redirect_la_OBJECTS = mod_redirect.lo
+@@ -514,7 +520,7 @@
+ 	$(mod_extforward_la_SOURCES) $(mod_fastcgi_la_SOURCES) \
+ 	$(mod_flv_streaming_la_SOURCES) $(mod_indexfile_la_SOURCES) \
+ 	$(mod_magnet_la_SOURCES) $(mod_mysql_vhost_la_SOURCES) \
+-	$(mod_proxy_la_SOURCES) $(mod_redirect_la_SOURCES) \
++	$(mod_proxy_la_SOURCES) $(mod_lisp_la_SOURCES) $(mod_redirect_la_SOURCES) \
+ 	$(mod_rewrite_la_SOURCES) $(mod_rrdtool_la_SOURCES) \
+ 	$(mod_scgi_la_SOURCES) $(mod_secdownload_la_SOURCES) \
+ 	$(mod_setenv_la_SOURCES) $(mod_simple_vhost_la_SOURCES) \
+@@ -532,7 +538,7 @@
+ 	$(mod_expire_la_SOURCES) $(mod_extforward_la_SOURCES) \
+ 	$(mod_fastcgi_la_SOURCES) $(mod_flv_streaming_la_SOURCES) \
+ 	$(mod_indexfile_la_SOURCES) $(mod_magnet_la_SOURCES) \
+-	$(mod_mysql_vhost_la_SOURCES) $(mod_proxy_la_SOURCES) \
++	$(mod_mysql_vhost_la_SOURCES) $(mod_proxy_la_SOURCES) $(mod_lisp_la_SOURCES) \
+ 	$(mod_redirect_la_SOURCES) $(mod_rewrite_la_SOURCES) \
+ 	$(mod_rrdtool_la_SOURCES) $(mod_scgi_la_SOURCES) \
+ 	$(mod_secdownload_la_SOURCES) $(mod_setenv_la_SOURCES) \
+@@ -758,7 +764,7 @@
+ 	mod_ssi.la mod_secdownload.la mod_expire.la mod_evhost.la \
+ 	mod_simple_vhost.la mod_fastcgi.la mod_extforward.la \
+ 	mod_access.la mod_compress.la mod_auth.la mod_rewrite.la \
+-	mod_redirect.la mod_status.la mod_accesslog.la
++	mod_redirect.la mod_status.la mod_accesslog.la mod_lisp.la
+ @NO_RDYNAMIC_TRUE@liblightcomp_la_SOURCES = $(common_src)
+ @NO_RDYNAMIC_TRUE@liblightcomp_la_CFLAGS = $(AM_CFLAGS) $(LIBEV_CFLAGS)
+ @NO_RDYNAMIC_TRUE@liblightcomp_la_LDFLAGS = -avoid-version -no-undefined
+@@ -823,6 +829,9 @@
+ mod_proxy_la_SOURCES = mod_proxy.c
+ mod_proxy_la_LDFLAGS = -module -export-dynamic -avoid-version
+ mod_proxy_la_LIBADD = $(common_libadd)
++mod_lisp_la_SOURCES = mod_lisp.c
++mod_lisp_la_LDFLAGS = -module -export-dynamic -avoid-version
++mod_lisp_la_LIBADD = $(common_libadd)
+ mod_ssi_la_SOURCES = mod_ssi_exprparser.c mod_ssi_expr.c mod_ssi.c
+ mod_ssi_la_LDFLAGS = -module -export-dynamic -avoid-version
+ mod_ssi_la_LIBADD = $(common_libadd) $(PCRE_LIB)
+@@ -1026,6 +1035,9 @@
+ mod_mysql_vhost.la: $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_DEPENDENCIES) $(EXTRA_mod_mysql_vhost_la_DEPENDENCIES) 
+ 	$(AM_V_CCLD)$(mod_mysql_vhost_la_LINK) -rpath $(libdir) $(mod_mysql_vhost_la_OBJECTS) $(mod_mysql_vhost_la_LIBADD) $(LIBS)
+ 
++mod_lisp.la: $(mod_lisp_la_OBJECTS) $(mod_lisp_la_DEPENDENCIES) $(EXTRA_mod_lisp_la_DEPENDENCIES) 
++	$(AM_V_CCLD)$(mod_lisp_la_LINK) -rpath $(libdir) $(mod_lisp_la_OBJECTS) $(mod_lisp_la_LIBADD) $(LIBS)
++
+ mod_proxy.la: $(mod_proxy_la_OBJECTS) $(mod_proxy_la_DEPENDENCIES) $(EXTRA_mod_proxy_la_DEPENDENCIES) 
+ 	$(AM_V_CCLD)$(mod_proxy_la_LINK) -rpath $(libdir) $(mod_proxy_la_OBJECTS) $(mod_proxy_la_LIBADD) $(LIBS)
+ 
+@@ -1246,6 +1258,7 @@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_magnet_la-mod_magnet_cache.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_mysql_vhost_la-mod_mysql_vhost.Plo@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_lisp.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_proxy.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_redirect.Plo@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mod_rewrite.Plo@am__quote@

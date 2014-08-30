@@ -1,0 +1,14 @@
+--- Makefile.am.orig	2013-12-03 20:17:52.000000000 +0400
++++ Makefile.am	2014-07-26 01:00:15.478735996 +0400
+@@ -190,6 +190,11 @@
+ mod_proxy_la_LDFLAGS = -module -export-dynamic -avoid-version
+ mod_proxy_la_LIBADD = $(common_libadd)
+ 
++lib_LTLIBRARIES += mod_lisp.la
++mod_lisp_la_SOURCES = mod_lisp.c
++mod_lisp_la_LDFLAGS = -module -export-dynamic -avoid-version
++mod_lisp_la_LIBADD = $(common_libadd)
++
+ lib_LTLIBRARIES += mod_ssi.la
+ mod_ssi_la_SOURCES = mod_ssi_exprparser.c mod_ssi_expr.c mod_ssi.c
+ mod_ssi_la_LDFLAGS = -module -export-dynamic -avoid-version
