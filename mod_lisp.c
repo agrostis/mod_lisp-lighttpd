@@ -1184,35 +1184,47 @@ static handler_t lisp_handle_fdevent(server *s, void *ctx, int revents)
 #endif
 
   /* Lisp is ready to read the request. */
-  if ((revents & FDEVENT_OUT) && !hctx->response_buf) {
-    handled = 1;
-    return mod_lisp_handle_subrequest(srv, con, p);
+  if (revents & FDEVENT_OUT) {
+    if (!hctx->response_buf) {
+      handled = 1;
+      return mod_lisp_handle_subrequest(srv, con, p);
+    } else {
+      /* Request has been already sent to, and response at least partially
+         received from, Lisp.  Proceed as if a socket error has occured. */
+      revents |= FDEVENT_ERR;
+    }
   }
   /* The request has been sent, Lisp has responded.  Now prepare the response to
      be passed to the incoming connection. */
-  if ((revents & FDEVENT_IN) && hctx->response_buf) {
-    handler_t ret;
-    handled = 1;
-    switch ((ret = mod_lisp_prepare_response(srv, hctx))) {
-    case HANDLER_ERROR:
-      if (con->file_started) {
-        /* Response might have been already started, kill the connection. */
-        connection_set_state(srv, con, CON_STATE_ERROR);
-      } else {
-        /* Nothing has been sent out yet, send a 500. */
-        connection_set_state(srv, con, CON_STATE_HANDLE_REQUEST);
-        con->http_status = 500;
-        con->mode = DIRECT;
+  if (revents & FDEVENT_IN) {
+    if (hctx->response_buf) {
+      handler_t ret;
+      handled = 1;
+      switch ((ret = mod_lisp_prepare_response(srv, hctx))) {
+      case HANDLER_ERROR:
+        if (con->file_started) {
+          /* Response might have been already started, kill the connection. */
+          connection_set_state(srv, con, CON_STATE_ERROR);
+        } else {
+          /* Nothing has been sent out yet, send a 500. */
+          connection_set_state(srv, con, CON_STATE_HANDLE_REQUEST);
+          con->http_status = 500;
+          con->mode = DIRECT;
+        }
+        joblist_append(srv, con);
+        return HANDLER_FINISHED;
+      case HANDLER_GO_ON:
+        break;
+      case HANDLER_FINISHED:
+        mod_lisp_connection_close(srv, con, p);
+        joblist_append(srv, con);
+      default:
+        return ret;
       }
-      joblist_append(srv, con);
-      return HANDLER_FINISHED;
-    case HANDLER_GO_ON:
-      break;
-    case HANDLER_FINISHED:
-      mod_lisp_connection_close(srv, con, p);
-      joblist_append(srv, con);
-    default:
-      return ret;
+    } else {
+      /* Lisp actually started to respond before a request could be sent.
+         Proceed as if a socket error has occured. */
+      revents |= FDEVENT_ERR;
     }
   }
   /* Lisp hung up. */
