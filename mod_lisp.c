@@ -609,6 +609,7 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
 
   if ((hctx = con->plugin_ctx[p->id])) {
     char *socket_msg;
+    int close_socket = 0;
     if (hctx->socket_data->fd < 0) {
       socket_msg = "no socket";
     } else {
@@ -620,9 +621,7 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
           FD_STATE_UNSAFE_EV_COUNT_INC(hctx->socket_data->state);
       } else {
         socket_msg = "close socket";
-        close(hctx->socket_data->fd);
-        srv->cur_fds--;
-        mod_lisp_release_socket(hctx->socket_data, p);
+        close_socket = 1;
       }
     }
     LOG_ERROR_MAYBE_BUF(srv, p, LOGLEVEL_DEBUG,
@@ -630,6 +629,11 @@ REQUESTDONE_FUNC (mod_lisp_connection_close)
                         " %s (fd=%d, total socket slot(s) allocated: %d)",
                         SPLICE_HOSTPORT(hctx->socket_data), socket_msg,
                         hctx->socket_data->fd, p->LispSocketPoolUsed);
+    if (close_socket) {
+      close(hctx->socket_data->fd);
+      srv->cur_fds--;
+      mod_lisp_release_socket(hctx->socket_data, p);
+    }
     handler_ctx_free(hctx);
     con->plugin_ctx[p->id] = NULL;
   }
