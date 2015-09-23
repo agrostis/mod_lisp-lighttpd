@@ -112,8 +112,15 @@ sessions, e.g.:
 
 [Support]
 
-mod_lisp-lighttpd is maintained by Boris Smilga.  Please address all bug
-reports and suggestions to boris.smilga (at) gmail (dot) com.
+mod_lisp-lighttpd has been phased out and is no longer actively
+maintained.  The advisable way to expose your Lisp applications to
+Lighttpd is by using a modern Web server Lisp-side (as of the time
+of this writing, Sept. 2015, the available options include at least
+Woo, TPD2 and Hunchentoot) and mod_proxy Lighty-side.  If you're
+still using a mod_lisp-based solution and need this program, or
+want a bug fixed that you've discovered in a legacy installation,
+address your reports to the maintainer, Boris Smilga, at
+boris.smilga (at) gmail (dot) com.
 
 
 [Known Issues]
